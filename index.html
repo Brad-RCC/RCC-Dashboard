@@ -858,15 +858,19 @@ async function loadDashboardData() {
 
 async function fetchProjectData(project, cid) {
   const pid = project.id;
-  const [rfis, submittals, commitments] = await Promise.allSettled([
+  const [rfis, submittals, commitments, primeContracts, invoices] = await Promise.allSettled([
     api(`/rest/v1.1/projects/${pid}/rfis?page=1&per_page=100`, cid),
     api(`/rest/v1.0/submittals?project_id=${pid}&per_page=100`, cid),
     api(`/rest/v1.0/commitments/contracts?project_id=${pid}`, cid),
+    api(`/rest/v1.0/projects/${pid}/prime_contracts`, cid),
+    api(`/rest/v1.0/projects/${pid}/invoices?per_page=100`, cid),
   ]);
   return {
-    rfis:        rfis.status        === 'fulfilled' ? rfis.value        : [],
-    submittals:  submittals.status  === 'fulfilled' ? submittals.value  : [],
-    commitments: commitments.status === 'fulfilled' ? commitments.value : [],
+    rfis:           rfis.status           === 'fulfilled' ? rfis.value           : [],
+    submittals:     submittals.status     === 'fulfilled' ? submittals.value     : [],
+    commitments:    commitments.status    === 'fulfilled' ? commitments.value    : [],
+    primeContracts: primeContracts.status === 'fulfilled' ? primeContracts.value : [],
+    invoices:       invoices.status       === 'fulfilled' ? invoices.value       : [],
   };
 }
 
@@ -888,7 +892,8 @@ function renderPortfolio(pd) {
     const openSubs = (d.submittals || []).filter(s => s.status && s.status.toLowerCase() !== 'closed').length;
     totalRFIs += openRFIs;
     totalSubs += openSubs;
-    const contractVal = p.contract_value || 0;
+    const contractVal = (d.primeContracts || []).reduce((s, c) => s + (parseFloat(c.grand_total) || 0), 0)
+                        || parseFloat(p.contract_value) || 0;
     return `<tr>
       <td><strong>${p.name}</strong></td>
       <td>${p.company ? p.company.name : '—'}</td>
@@ -910,7 +915,10 @@ function renderPortfolio(pd) {
   document.getElementById('kpi-submittals').textContent     = totalSubs;
   document.getElementById('project-count-badge').textContent = `${pd.length} projects`;
 
-  const totalCV = pd.reduce((s, { project: p }) => s + (p.contract_value || 0), 0);
+  const totalCV = pd.reduce((s, { data: d, project: p }) => {
+    return s + ((d.primeContracts || []).reduce((t, c) => t + (parseFloat(c.grand_total) || 0), 0)
+                || parseFloat(p.contract_value) || 0);
+  }, 0);
   document.getElementById('kpi-contract-value').textContent = fmtMoney(totalCV);
 }
 
@@ -920,8 +928,9 @@ function renderFinancial(pd) {
   let totCommitted = 0, totPCO = 0, totSubs = 0;
 
   pd.forEach(({ project: p, data: d }) => {
-    const cv   = p.contract_value || 0;
-    const comm = (d.commitments || []).reduce((s, c) => s + (c.contract_executed_amount || c.grand_total || 0), 0);
+    const cv   = (d.primeContracts || []).reduce((s, c) => s + (parseFloat(c.grand_total) || 0), 0)
+                 || parseFloat(p.contract_value) || 0;
+    const comm = (d.commitments || []).reduce((s, c) => s + (parseFloat(c.contract_executed_amount) || parseFloat(c.grand_total) || 0), 0);
     const pco  = 0; // PCOs need separate endpoint
     const sub  = (d.commitments || []).length;
     totCommitted += comm;
@@ -943,16 +952,19 @@ function renderFinancial(pd) {
      { label: 'Committed Cost', data: committed, backgroundColor: '#E85D0499' }]);
 
   const sectorMap = {};
-  pd.forEach(({ project: p }) => {
+  pd.forEach(({ project: p, data: d }) => {
     const sector = p.project_type || 'Other';
-    sectorMap[sector] = (sectorMap[sector] || 0) + (p.contract_value || 0);
+    const cv = (d.primeContracts || []).reduce((s, c) => s + (parseFloat(c.grand_total) || 0), 0)
+               || parseFloat(p.contract_value) || 0;
+    sectorMap[sector] = (sectorMap[sector] || 0) + cv;
   });
   drawChart('chart-contract-split', 'doughnut', Object.keys(sectorMap),
     [{ data: Object.values(sectorMap), backgroundColor: ['#E85D04','#2D7DD2','#1A9E5C','#E08A00','#9B59B6','#34495E'] }]);
 
   const rows = pd.map(({ project: p, data: d }) => {
-    const cv   = p.contract_value || 0;
-    const comm = (d.commitments || []).reduce((s, c) => s + (c.contract_executed_amount || c.grand_total || 0), 0);
+    const cv   = (d.primeContracts || []).reduce((s, c) => s + (parseFloat(c.grand_total) || 0), 0)
+                 || parseFloat(p.contract_value) || 0;
+    const comm = (d.commitments || []).reduce((s, c) => s + (parseFloat(c.contract_executed_amount) || parseFloat(c.grand_total) || 0), 0);
     const pct  = cv > 0 ? (comm / cv * 100) : 0;
     const health = pct > 95 ? 'pill-red' : pct > 80 ? 'pill-amber' : 'pill-green';
     const healthLabel = pct > 95 ? 'At Risk' : pct > 80 ? 'Monitor' : 'On Track';
@@ -972,21 +984,20 @@ function renderFinancial(pd) {
 
 // ── INVOICES ───────────────────────────────────────────────────────────────────
 function renderInvoices(pd) {
-  // Commitments contain subcontractor invoices (payment applications)
   let approved = 0, pending = 0, draft = 0, total = 0;
   const projectInvCounts = [], projectNames = [];
 
   pd.forEach(({ project: p, data: d }) => {
-    const comms = d.commitments || [];
-    total      += comms.length;
-    const approvedCount = comms.filter(c => c.status === 'Approved' || c.status === 'complete').length;
-    const pendingCount  = comms.filter(c => c.status === 'Pending' || c.status === 'under_review').length;
-    const draftCount    = comms.filter(c => c.status === 'Draft' || c.status === 'draft').length;
-    approved += approvedCount;
-    pending  += pendingCount;
-    draft    += draftCount;
+    const invs = d.invoices || [];
+    total += invs.length;
+    invs.forEach(inv => {
+      const s = (inv.status || '').toLowerCase();
+      if (s === 'approved' || s === 'paid') approved++;
+      else if (s === 'submitted' || s === 'under_review' || s === 'pending') pending++;
+      else draft++;
+    });
     projectNames.push(shortName(p.name));
-    projectInvCounts.push(comms.length);
+    projectInvCounts.push(invs.length);
   });
 
   document.getElementById('inv-total').textContent    = total;
@@ -995,26 +1006,34 @@ function renderInvoices(pd) {
   document.getElementById('inv-revise').textContent   = draft;
 
   drawChart('chart-invoices', 'doughnut',
-    ['Approved', 'Pending Review', 'Draft / Revise', 'Other'],
-    [{ data: [approved, pending, draft, Math.max(0, total - approved - pending - draft)],
-       backgroundColor: ['#1A9E5C','#E08A00','#D63B3B','#8899AA'] }]);
+    ['Approved', 'Pending Review', 'Draft / Revise'],
+    [{ data: [approved, pending, draft],
+       backgroundColor: ['#1A9E5C','#E08A00','#D63B3B'] }]);
 
   drawChart('chart-invoices-project', 'bar', projectNames,
-    [{ label: 'Commitment Contracts', data: projectInvCounts, backgroundColor: '#E85D0466' }]);
+    [{ label: 'Invoices', data: projectInvCounts, backgroundColor: '#E85D0466' }]);
 
-  // Invoice register from commitments
+  const today = new Date();
   const rows = pd.flatMap(({ project: p, data: d }) =>
-    (d.commitments || []).slice(0, 5).map(c => `<tr>
-      <td>${p.name}</td>
-      <td>${c.number || '—'}</td>
-      <td>${fmtMoney(c.grand_total || c.contract_executed_amount || 0)}</td>
-      <td><span class="pill ${statusPill(c.status)}">${c.status || 'Unknown'}</span></td>
-      <td>${c.created_at ? fmtDate(c.created_at) : '—'}</td>
-      <td>—</td>
-    </tr>`)
+    (d.invoices || []).map(inv => {
+      const s = (inv.status || '').toLowerCase();
+      const pillClass = s === 'approved' || s === 'paid' ? 'pill-green'
+                      : s === 'submitted' || s === 'under_review' ? 'pill-amber'
+                      : 'pill-red';
+      const due = inv.due_date ? new Date(inv.due_date) : null;
+      const overdue = due && due < today && s !== 'approved' && s !== 'paid';
+      return `<tr>
+        <td>${p.name}</td>
+        <td>${inv.number || inv.invoice_number || '—'}</td>
+        <td>${fmtMoney(parseFloat(inv.grand_total) || parseFloat(inv.amount) || 0)}</td>
+        <td><span class="pill ${overdue ? 'pill-red' : pillClass}">${overdue ? 'Overdue' : (inv.status || 'Unknown')}</span></td>
+        <td>${inv.invoice_date || inv.created_at ? fmtDate(inv.invoice_date || inv.created_at) : '—'}</td>
+        <td>${due ? fmtDate(due.toISOString()) : '—'}</td>
+      </tr>`;
+    })
   );
   document.getElementById('invoices-tbody').innerHTML = rows.join('') ||
-    `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🧾</div><p>No invoice data available.</p></div></td></tr>`;
+    `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🧾</div><p>No invoices found. Ensure the Invoices tool is enabled on your Procore projects.</p></div></td></tr>`;
 }
 
 // ── FORECAST ───────────────────────────────────────────────────────────────────
@@ -1023,8 +1042,9 @@ function renderForecast(pd) {
   let totOriginal = 0, totRevised = 0, totPFC = 0;
 
   pd.forEach(({ project: p, data: d }) => {
-    const cv   = p.contract_value || 0;
-    const comm = (d.commitments || []).reduce((s, c) => s + (c.grand_total || 0), 0);
+    const cv   = (d.primeContracts || []).reduce((s, c) => s + (parseFloat(c.grand_total) || 0), 0)
+                 || parseFloat(p.contract_value) || 0;
+    const comm = (d.commitments || []).reduce((s, c) => s + (parseFloat(c.grand_total) || 0), 0);
     const pfc  = comm > 0 ? comm * 1.05 : cv; // Simple 5% buffer as placeholder
     totOriginal += cv;
     totRevised  += cv;
