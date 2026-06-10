@@ -838,11 +838,21 @@ async function loadDashboardData() {
     window._projects = projects;
     window._cid      = cid;
 
-    // 3. Per-project data in parallel
+    // 3. Per-project data in batches of 3 to avoid Procore rate limits
     showLoading('Loading financial data...');
-    const perProject = await Promise.allSettled(
-      projects.map(p => fetchProjectData(p, cid))
-    );
+    const batchSize = 3;
+    const perProject = [];
+    for (let i = 0; i < projects.length; i += batchSize) {
+      const batch = projects.slice(i, i + batchSize);
+      showLoading(`Loading project data... (${Math.min(i + batchSize, projects.length)} of ${projects.length})`);
+      const batchResults = await Promise.allSettled(
+        batch.map(p => fetchProjectData(p, cid))
+      );
+      perProject.push(...batchResults);
+      if (i + batchSize < projects.length) {
+        await new Promise(resolve => setTimeout(resolve, 600));
+      }
+    }
     window._projectData = perProject.map((r, i) => ({
       project: projects[i],
       data:    r.status === 'fulfilled' ? r.value : {},
