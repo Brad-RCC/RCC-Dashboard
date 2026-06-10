@@ -859,6 +859,20 @@ async function loadDashboardData() {
     }));
 
     renderAll(company, window._projectData);
+
+    // DEBUG — log first project's data to console
+    if (window._projectData.length > 0) {
+      const first = window._projectData[0];
+      console.log('=== RCC BMD DEBUG ===');
+      console.log('Project:', first.project.name);
+      console.log('project.contract_value:', first.project.contract_value);
+      console.log('primeContracts:', JSON.stringify(first.data.primeContracts));
+      console.log('commitments:', JSON.stringify(first.data.commitments));
+      console.log('invoices:', JSON.stringify(first.data.invoices));
+      console.log('rfis count:', (first.data.rfis||[]).length);
+      console.log('submittals count:', (first.data.submittals||[]).length);
+      console.log('=== END DEBUG ===');
+    }
   } catch (e) {
     showError(`Failed to load data: ${e.message}`);
   } finally {
