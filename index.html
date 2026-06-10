@@ -823,9 +823,9 @@ async function loadDashboardData() {
   showLoading('Fetching Procore data...');
   hideError();
   try {
-    // 1. Companies
+    // 1. Companies — filter for RAW-SA specifically
     const companies = await api('/rest/v1.0/companies');
-    const company   = companies[0];
+    const company   = companies.find(c => String(c.id) === '598134325538795') || companies[0];
     if (!company) throw new Error('No companies found for this account.');
     const cid = company.id;
 
