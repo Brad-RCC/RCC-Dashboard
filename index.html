@@ -850,7 +850,7 @@ async function loadDashboardData() {
       );
       perProject.push(...batchResults);
       if (i + batchSize < projects.length) {
-        await new Promise(resolve => setTimeout(resolve, 600));
+        await new Promise(resolve => setTimeout(resolve, 1200));
       }
     }
     window._projectData = perProject.map((r, i) => ({
@@ -883,18 +883,18 @@ async function loadDashboardData() {
 async function fetchProjectData(project, cid) {
   const pid = project.id;
   const [rfis, submittals, commitments, primeContracts, invoices] = await Promise.allSettled([
-    api(`/rest/v1.1/projects/${pid}/rfis?page=1&per_page=100`, cid),
+    api(`/rest/v1.0/rfis?project_id=${pid}&per_page=100`, cid),
     api(`/rest/v1.0/submittals?project_id=${pid}&per_page=100`, cid),
     api(`/rest/v1.0/commitments/contracts?project_id=${pid}`, cid),
-    api(`/rest/v1.0/projects/${pid}/prime_contracts`, cid),
-    api(`/rest/v1.0/projects/${pid}/invoices?per_page=100`, cid),
+    api(`/rest/v1.0/prime_contracts?project_id=${pid}`, cid),
+    api(`/rest/v1.0/payment_applications?project_id=${pid}&per_page=100`, cid),
   ]);
   return {
-    rfis:           rfis.status           === 'fulfilled' ? rfis.value           : [],
-    submittals:     submittals.status     === 'fulfilled' ? submittals.value     : [],
-    commitments:    commitments.status    === 'fulfilled' ? commitments.value    : [],
-    primeContracts: primeContracts.status === 'fulfilled' ? primeContracts.value : [],
-    invoices:       invoices.status       === 'fulfilled' ? invoices.value       : [],
+    rfis:           rfis.status           === 'fulfilled' ? (Array.isArray(rfis.value) ? rfis.value : (rfis.value?.rfis || [])) : [],
+    submittals:     submittals.status     === 'fulfilled' ? (Array.isArray(submittals.value) ? submittals.value : []) : [],
+    commitments:    commitments.status    === 'fulfilled' ? (Array.isArray(commitments.value) ? commitments.value : []) : [],
+    primeContracts: primeContracts.status === 'fulfilled' ? (Array.isArray(primeContracts.value) ? primeContracts.value : []) : [],
+    invoices:       invoices.status       === 'fulfilled' ? (Array.isArray(invoices.value) ? invoices.value : []) : [],
   };
 }
 
